@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Brawl PC - Mode Survie & Regen</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0b1015; font-family: 'Arial', sans-serif; }
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            color: white; z-index: 10; background: rgba(0,0,0,0.7);
+        }
+        .menu-box { background: #1a252c; padding: 40px; border-radius: 20px; border: 3px solid #2196F3; text-align: center; min-width: 350px; position: relative; }
+        .btn {
+            background: #2196F3; border: none; border-radius: 10px; padding: 15px 30px;
+            color: white; font-size: 18px; font-weight: bold; cursor: pointer; margin: 10px;
+            text-transform: uppercase; transition: 0.2s; width: 80%;
+        }
+        .btn:hover { background: #1e88e5; transform: scale(1.05); }
+        .btn-settings { position: absolute; top: 20px; right: 20px; width: 50px; height: 50px; border-radius: 50%; padding: 0; font-size: 24px; z-index: 20; background: #555; border: none; cursor: pointer; }
+        
+        #screen-settings { position: absolute; z-index: 30; }
+        .settings-list { text-align: left; margin: 20px 0; line-height: 1.6; background: #0d141a; padding: 15px; border-radius: 10px; }
+        .volume-control { margin-top: 20px; }
+        input[type=range] { width: 100%; cursor: pointer; }
+
+        .hidden { display: none !important; }
+        .menu-title { font-size: 40px; color: #81D4FA; margin-bottom: 20px; font-weight: bold; }
+        .code-display { font-size: 32px; color: #FFEB3B; font-weight: bold; margin: 20px 0; }
+    </style>
+</head>
+<body>
+
+<button class="btn btn-settings" id="btn-open-settings">⚙️</button>
+
+<div id="ui-layer">
+    <div id="screen-mode" class="menu-box">
+        <div id="status-text" class="menu-title">BRAWL PC</div>
+        <button class="btn" id="btn-solo">SURVIE (1 BOT / 2s)</button>
+        <button class="btn" style="background: #ff9800" id="btn-multi-choice">MODE ÉQUIPE</button>
+    </div>
+
+    <div id="screen-settings" class="menu-box hidden">
+        <div class="menu-title">PARAMÈTRES</div>
+        <div class="settings-list">
+            <b>COMMANDES :</b><br>
+            • Z,Q,S,D pour bouger<br>
+            • Clic Gauche pour tirer<br>
+            • <b>Regen : tous les 3 kills !</b>
+        </div>
+        <div class="volume-control">
+            <label>VOLUME :</label><br>
+            <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="0.5">
+        </div>
+        <button class="btn" style="background: #e74c3c; margin-top: 20px;" id="btn-close-settings">FERMER</button>
+    </div>
+
+    <div id="screen-multi-choice" class="menu-box hidden">
+        <div class="menu-title">ÉQUIPE</div>
+        <button class="btn" style="background: #2ecc71" id="btn-create-room">CRÉER UNE ÉQUIPE</button>
+        <button class="btn" id="btn-go-join">REJOINDRE UNE ÉQUIPE</button>
+        <button class="btn" style="background:#555" id="btn-back-mode">RETOUR</button>
+    </div>
+
+    <div id="screen-join" class="menu-box hidden">
+        <div class="menu-title">REJOINDRE</div>
+        <input type="text" id="room-code-input" placeholder="CODE" style="padding:10px; width:60%; margin-bottom:10px;">
+        <button class="btn" style="background: #2ecc71" id="btn-confirm-join">REJOINDRE</button>
+        <button class="btn" style="background:#555" id="btn-back-choice">RETOUR</button>
+    </div>
+
+    <div id="screen-wait" class="menu-box hidden">
+        <div class="menu-title">TON ÉQUIPE</div>
+        <div id="display-code" class="code-display">----</div>
+        <button class="btn" style="background: #2ecc71" id="btn-start-multi">LANCER</button>
+        <button class="btn" style="background:#e74c3c" id="btn-cancel">ANNULER</button>
+    </div>
+</div>
+
+<script>
+const config = {
+    type: Phaser.AUTO,
+    width: window.innerWidth, height: window.innerHeight,
+    physics: { default: 'arcade', arcade: { debug: false } },
+    scene: { preload: preload, create: create, update: update }
+};
+
+const game = new Phaser.Game(config);
+let player, keys, bullets, enemyBullets, enemies, fKey, bgMusic, scoreText, readyText, regenText;
+let score = 0, killCountForRegen = 0, isGameStarted = false, isSpawnDelay = false, gameMode = "";
+let spawnTimer;
+
+function preload() {
+    this.textures.addCanvas('playerTex', createBrawlerTexture('#1565C0', '#BBDEFB'));
+    this.textures.addCanvas('enemyTex', createBrawlerTexture('#c01515', '#ffbaba'));
+    this.textures.addCanvas('bulletTex', createBulletTexture('#FFEB3B'));
+    this.textures.addCanvas('eBulletTex', createBulletTexture('#FF5252'));
+    this.load.audio('theme', 'musique.mp3');
+}
+
+function create() {
+    const scene = this;
+    bullets = this.physics.add.group();
+    enemyBullets = this.physics.add.group();
+    enemies = this.physics.add.group();
+
+    player = this.physics.add.sprite(window.innerWidth/2, window.innerHeight/2, 'playerTex');
+    player.setCollideWorldBounds(true).setScale(1.5).setActive(false).setVisible(false);
+    player.health = 100; player.maxHealth = 100; player.bar = this.add.graphics();
+
+    scoreText = this.add.text(20, 20, 'POINTS: 0 / 10', { fontSize: '32px', fill: '#FFEB3B', fontStyle: 'bold' }).setVisible(false);
+    readyText = this.add.text(window.innerWidth/2, window.innerHeight/2, '', { fontSize: '64px', fill: '#FFF', fontStyle: 'bold' }).setOrigin(0.5).setVisible(false);
+    
+    // Texte spécial Regen
+    regenText = this.add.text(0, 0, 'REGEN +100%', { fontSize: '24px', fill: '#2ecc71', fontStyle: 'bold' }).setOrigin(0.5).setVisible(false);
+
+    keys = this.input.keyboard.addKeys({
+        up: Phaser.Input.Keyboard.KeyCodes.Z, down: Phaser.Input.Keyboard.KeyCodes.S,
+        left: Phaser.Input.Keyboard.KeyCodes.Q, right: Phaser.Input.Keyboard.KeyCodes.D
+    });
+    fKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F);
+
+    try { bgMusic = this.sound.add('theme', { loop: true, volume: 0.5 }); } catch(e) {}
+
+    const show = (id) => {
+        document.querySelectorAll('.menu-box').forEach(el => el.classList.add('hidden'));
+        document.getElementById(id).classList.remove('hidden');
+    };
+
+    document.getElementById('btn-open-settings').onclick = () => document.getElementById('screen-settings').classList.remove('hidden');
+    document.getElementById('btn-close-settings').onclick = () => document.getElementById('screen-settings').classList.add('hidden');
+    document.getElementById('volume-slider').oninput = (e) => { if (bgMusic) bgMusic.setVolume(e.target.value); };
+
+    const runStart = (mode) => {
+        isGameStarted = true; isSpawnDelay = true; gameMode = mode; 
+        score = 0; killCountForRegen = 0;
+        enemies.clear(true, true); enemyBullets.clear(true, true);
+        player.setActive(true).setVisible(true).setPosition(window.innerWidth/2, window.innerHeight/2);
+        player.health = 100;
+        scoreText.setText('POINTS: 0 / 10').setVisible(true);
+        document.getElementById('ui-layer').classList.add('hidden');
+        scene.cameras.main.setBackgroundColor('#2c3e50');
+        if(bgMusic && scene.cache.audio.exists('theme')) bgMusic.play();
+        
+        readyText.setText("PRÊT ?").setVisible(true);
+        scene.time.delayedCall(2000, () => {
+            readyText.setText("SURVIVE !");
+            isSpawnDelay = false;
+            
+            // SPAWN TOUTES LES 2 SECONDES
+            spawnTimer = scene.time.addEvent({
+                delay: 2000,
+                callback: () => { if(isGameStarted) spawnEnemy(scene); },
+                loop: true
+            });
+
+            scene.time.delayedCall(1000, () => { readyText.setVisible(false); });
+        });
+    };
+
+    document.getElementById('btn-solo').onclick = () => runStart("solo");
+    document.getElementById('btn-multi-choice').onclick = () => show('screen-multi-choice');
+    document.getElementById('btn-back-mode').onclick = () => show('screen-mode');
+    document.getElementById('btn-create-room').onclick = () => {
+        document.getElementById('display-code').innerText = "BRAWL-" + Math.floor(1000+Math.random()*9000);
+        show('screen-wait');
+    };
+    document.getElementById('btn-start-multi').onclick = () => runStart("multi");
+    document.getElementById('btn-confirm-join').onclick = () => runStart("multi");
+
+    // COLLISIONS ET LOGIQUE REGEN
+    this.physics.add.overlap(bullets, enemies, (b, e) => {
+        b.destroy(); e.health -= 20;
+        if (e.health <= 0) {
+            e.bar.destroy(); e.destroy(); 
+            score++; killCountForRegen++;
+            scoreText.setText('POINTS: ' + score + ' / 10');
+
+            // SYSTÈME DE REGEN TOUS LES 3 KILLS
+            if (killCountForRegen >= 3) {
+                player.health = 100;
+                killCountForRegen = 0;
+                showRegenText(scene);
+            }
+
+            if (score >= 10) endGame(this, true);
+        }
+    });
+
+    this.physics.add.overlap(enemyBullets, player, (p, b) => {
+        if (isGameStarted && p.active && !isSpawnDelay) {
+            b.destroy(); p.health -= 10;
+            if (p.health <= 0) endGame(this, false);
+        }
+    });
+
+    this.input.on('pointerdown', () => { if (isGameStarted && player.active && !isSpawnDelay) shoot(this); });
+}
+
+function showRegenText(scene) {
+    regenText.setPosition(player.x, player.y - 80).setVisible(true);
+    scene.time.delayedCall(1000, () => regenText.setVisible(false));
+}
+
+function update(time) {
+    if (Phaser.Input.Keyboard.JustDown(fKey)) {
+        if (this.scale.isFullscreen) this.scale.stopFullscreen(); else this.scale.startFullscreen();
+    }
+    if (!isGameStarted || !player.active || isSpawnDelay) { if(player.active) player.setVelocity(0); return; }
+
+    player.setVelocity(0);
+    if (keys.left.isDown) player.setVelocityX(-350);
+    if (keys.right.isDown) player.setVelocityX(350);
+    if (keys.up.isDown) player.setVelocityY(-350);
+    if (keys.down.isDown) player.setVelocityY(350);
+
+    player.setRotation(Phaser.Math.Angle.Between(player.x, player.y, this.input.x, this.input.y) + Math.PI/2);
+    drawHealthBar(player.bar, player.x - 40, player.y - 60, player.health / player.maxHealth);
+
+    enemies.getChildren().forEach(enemy => {
+        let dist = Phaser.Math.Distance.Between(enemy.x, enemy.y, player.x, player.y);
+        if (dist > 250) this.physics.moveToObject(enemy, player, 160); else enemy.setVelocity(0);
+        enemy.setRotation(Phaser.Math.Angle.Between(enemy.x, enemy.y, player.x, player.y) + Math.PI/2);
+        if (time > enemy.lastFired) { enemyShoot(this, enemy); enemy.lastFired = time + 600; }
+        drawHealthBar(enemy.bar, enemy.x - 30, enemy.y - 50, enemy.health / enemy.maxHealth, 60);
+    });
+}
+
+function endGame(scene, win) {
+    isGameStarted = false; if(bgMusic) bgMusic.stop();
+    if(spawnTimer) spawnTimer.remove();
+    player.setActive(false).setVisible(false); player.bar.clear();
+    enemies.clear(true, true); enemyBullets.clear(true, true);
+    scoreText.setVisible(false); readyText.setVisible(false);
+    document.getElementById('ui-layer').classList.remove('hidden');
+    document.getElementById('screen-mode').classList.remove('hidden');
+    document.getElementById('status-text').innerText = win ? "VICTOIRE ! 🏆" : "DÉFAITE ! 💀";
+    document.getElementById('status-text').style.color = win ? "#2ecc71" : "#ff5252";
+}
+
+function spawnEnemy(scene) {
+    let x = Phaser.Math.Between(100, window.innerWidth - 100), y = Phaser.Math.Between(100, window.innerHeight - 100);
+    if (Phaser.Math.Distance.Between(x, y, player.x, player.y) < 300) x = (x + 400) % window.innerWidth;
+    let enemy = enemies.create(x, y, 'enemyTex');
+    enemy.setCollideWorldBounds(true).setScale(1.3);
+    enemy.health = 60; enemy.maxHealth = 60; enemy.lastFired = 0; enemy.bar = scene.add.graphics();
+}
+
+function drawHealthBar(graphics, x, y, percentage, width = 80) {
+    graphics.clear(); graphics.fillStyle(0x000000); graphics.fillRect(x, y, width, 8);
+    graphics.fillStyle(percentage > 0.3 ? 0x2ecc71 : 0xe74c3c);
+    graphics.fillRect(x, y, width * Math.max(0, percentage), 8);
+}
+
+function shoot(scene) {
+    let b = bullets.create(player.x, player.y, 'bulletTex');
+    scene.physics.moveTo(b, scene.input.x, scene.input.y, 800);
+    b.setRotation(player.rotation);
+}
+
+function enemyShoot(scene, enemy) {
+    if (!player.active || isSpawnDelay) return;
+    let b = enemyBullets.create(enemy.x, enemy.y, 'eBulletTex');
+    scene.physics.moveToObject(b, player, 400);
+    b.setRotation(enemy.rotation);
+}
+
+function createBrawlerTexture(m, e) {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 64; const x = c.getContext('2d');
+    x.fillStyle = m; x.fillRect(16, 16, 32, 32); x.fillStyle = e; x.fillRect(24, 20, 16, 4); return c;
+}
+
+function createBulletTexture(c) {
+    const v = document.createElement('canvas'); v.width = 8; v.height = 16; const x = v.getContext('2d');
+    x.fillStyle = c; x.fillRect(0, 0, 8, 16); return v;
+}
+</script>
+</body>
+</html>
